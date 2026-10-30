@@ -4,8 +4,11 @@ import java.io.ByteArrayInputStream;
 import java.lang.reflect.Method;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 
+import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
+import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.junit.jupiter.api.Test;
 
 import io.kestra.core.junit.annotations.KestraTest;
@@ -17,6 +20,7 @@ import io.kestra.core.runners.RunContext;
 import io.kestra.core.runners.RunContextFactory;
 import io.kestra.core.utils.IdUtils;
 import io.kestra.core.utils.TestsUtils;
+import io.kestra.plugin.beam.config.DataflowRunnerConfig;
 import io.kestra.plugin.beam.config.RunnerConfigHolder;
 
 import jakarta.inject.Inject;
@@ -167,6 +171,46 @@ class RunPipelineTest {
 
         var exception = assertThrows(IllegalArgumentException.class, () -> task.run(runContext));
         assertTrue(exception.getMessage().contains("serviceAccountKey"));
+    }
+
+    @Test
+    void shouldPassJavaOptionValuesUnquoted() throws Exception {
+        var task = RunPipeline.builder()
+            .id(IdUtils.create())
+            .type(RunPipeline.class.getName())
+            .sdk(Property.ofValue(BeamSDK.JAVA))
+            .definition(Property.ofValue("pipeline: {}"))
+            .build();
+        var runnerOptions = DataflowRunnerConfig.builder()
+            .projectId("my-project")
+            .region("europe-west1")
+            .maxWorkers(5)
+            .build()
+            .toJavaPipelineOptions();
+
+        @SuppressWarnings("unchecked")
+        var args = (List<String>) invokePrivate(task, "javaOptionArgs", Map.of("tempLocation", "gs://my-bucket/tmp"), runnerOptions);
+        var options = PipelineOptionsFactory.fromArgs(args.toArray(String[]::new)).withValidation().create()
+            .as(DataflowPipelineOptions.class);
+
+        assertEquals("my-project", options.getProject());
+        assertEquals("europe-west1", options.getRegion());
+        assertEquals(5, options.getMaxNumWorkers());
+        assertEquals("gs://my-bucket/tmp", options.getTempLocation());
+    }
+
+    @Test
+    void shouldShellQuoteOptionValuesForPythonCommandLine() throws Exception {
+        var task = RunPipeline.builder()
+            .id(IdUtils.create())
+            .type(RunPipeline.class.getName())
+            .definition(Property.ofValue("pipeline: {}"))
+            .build();
+
+        @SuppressWarnings("unchecked")
+        var args = (List<String>) invokePrivate(task, "buildOptionArgs", Map.of("job_name", "a b; rm -rf /"), Map.of());
+
+        assertEquals(List.of("--job_name='a b; rm -rf /'"), args);
     }
 
     private Object invokePrivate(Object target, String method, Object... args) throws Exception {

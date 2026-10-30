@@ -290,7 +290,7 @@ public class RunPipeline extends AbstractExecScript implements io.kestra.core.mo
         RunnerConfigHolder runnerConfigHolder) {
 
         PipelineOptions po = PipelineOptionsFactory
-            .fromArgs(buildOptionArgs(options, javaRunnerOptions(runnerConfigHolder)).toArray(String[]::new))
+            .fromArgs(javaOptionArgs(options, javaRunnerOptions(runnerConfigHolder)).toArray(String[]::new))
             .withValidation()
             .create();
 
@@ -445,6 +445,17 @@ public class RunPipeline extends AbstractExecScript implements io.kestra.core.mo
         List<String> args = new ArrayList<>();
         options.forEach((k, v) -> args.add("--" + k + "=" + shellQuote(v)));
         runnerOptions.forEach((k, v) -> args.add("--" + k + "=" + shellQuote(stringify(v))));
+        return args;
+    }
+
+    // PipelineOptionsFactory.fromArgs is not a shell, so the values are passed as is:
+    // shell quotes would stay in the value ('my-project') or fail to parse ('5' as an int).
+    private List<String> javaOptionArgs(
+        Map<String, String> options,
+        Map<String, Object> runnerOptions) {
+        List<String> args = new ArrayList<>();
+        options.forEach((k, v) -> args.add("--" + k + "=" + v));
+        runnerOptions.forEach((k, v) -> args.add("--" + k + "=" + stringify(v)));
         return args;
     }
 

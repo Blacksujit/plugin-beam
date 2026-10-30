@@ -4,7 +4,11 @@ import org.apache.beam.runners.flink.FlinkPipelineOptions;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+import java.util.Map;
+
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.hasEntry;
 import static org.hamcrest.Matchers.hasKey;
 import static org.hamcrest.Matchers.is;
@@ -55,5 +59,46 @@ class FlinkRunnerConfigTest {
             .build();
 
         assertThrows(IllegalArgumentException.class, config::toPipelineOptions);
+    }
+
+    @Test
+    void shouldUseJavaOptionNamesWithJavaSdk() {
+        var config = FlinkRunnerConfig.builder()
+            .parallelism(2)
+            .savepointDir("/tmp/sp")
+            .stateBackend("rocksdb")
+            .stateBackendStoragePath("file:///tmp/state")
+            .jarPath("/tmp/job.jar")
+            .build();
+
+        var args = config.toJavaPipelineOptions().entrySet().stream()
+            .map(e -> "--" + e.getKey() + "=" + e.getValue())
+            .toArray(String[]::new);
+        var options = PipelineOptionsFactory.fromArgs(args).withValidation().create().as(FlinkPipelineOptions.class);
+
+        assertThat(options.getParallelism(), is(2));
+        assertThat(options.getSavepointPath(), is("/tmp/sp"));
+        assertThat(options.getStateBackend(), is("rocksdb"));
+        assertThat(options.getStateBackendStoragePath(), is("file:///tmp/state"));
+        assertThat(options.getFilesToStage(), contains("/tmp/job.jar"));
+    }
+
+    @Test
+    void shouldKeepPythonOptionNamesWithPythonSdk() {
+        var config = FlinkRunnerConfig.builder()
+            .parallelism(2)
+            .savepointDir("/tmp/sp")
+            .stateBackend("rocksdb")
+            .stateBackendStoragePath("file:///tmp/state")
+            .jarPath("/tmp/job.jar")
+            .build();
+
+        assertThat(config.toPipelineOptions(), is(Map.<String, Object>of(
+            "parallelism", 2,
+            "savepoint_path", "/tmp/sp",
+            "state_backend", "rocksdb",
+            "state_backend_storage_path", "file:///tmp/state",
+            "files_to_stage", "/tmp/job.jar"
+        )));
     }
 }
