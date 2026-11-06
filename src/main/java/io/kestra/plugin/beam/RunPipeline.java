@@ -38,6 +38,7 @@ import io.kestra.core.serializers.JacksonMapper;
 import io.kestra.plugin.beam.config.*;
 import io.kestra.plugin.scripts.exec.AbstractExecScript;
 import io.kestra.plugin.scripts.exec.scripts.models.ScriptOutput;
+import io.kestra.plugin.scripts.exec.scripts.runners.CommandsWrapper;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
@@ -252,11 +253,24 @@ public class RunPipeline extends AbstractExecScript implements io.kestra.core.mo
             sdk, runner, mode
         );
 
+        if (mode == ExecutionMode.JAVA_CLASSIC) {
+            warnIgnoredScriptProperties(runContext);
+        }
+
         return switch (mode) {
             case JAVA_CLASSIC -> runJava(runContext, yaml, runner, opts, cfg);
             case PYTHON_DIRECT -> runPythonCli(runContext, yaml, opts, false, rPipelineTimeoutSeconds);
             case PYTHON_PORTABLE -> runPythonPortable(runContext, yaml, opts, cfg, rPipelineTimeoutSeconds);
         };
+    }
+
+    void warnIgnoredScriptProperties(RunContext runContext) {
+        if (this.getEnv() != null) {
+            runContext.logger().warn("`env` is only applied when `sdk` is `PYTHON`; it is ignored for the Java SDK, which runs in-process.");
+        }
+        if (this.beforeCommands != null) {
+            runContext.logger().warn("`beforeCommands` is only applied when `sdk` is `PYTHON`; it is ignored for the Java SDK, which runs in-process.");
+        }
     }
 
     private ExecutionMode resolveExecutionMode(BeamSDK sdk, BeamRunner runner) {
@@ -337,7 +351,6 @@ public class RunPipeline extends AbstractExecScript implements io.kestra.core.mo
             yaml.getBytes(StandardCharsets.UTF_8)
         );
 
-        Map<String, String> env = new HashMap<>();
         List<String> reqs = runContext.render(this.requirements).asList(String.class);
 
         String prelude = "";
@@ -345,9 +358,8 @@ public class RunPipeline extends AbstractExecScript implements io.kestra.core.mo
             Path target = Paths.get("/tmp/beam-py-" + UUID.randomUUID());
             prelude = "mkdir -p " + shellQuote(target.toString())
                 + " && python3 -m pip install --no-cache-dir --target " + shellQuote(target.toString()) + " "
-                + reqs.stream().map(this::shellQuote).collect(Collectors.joining(" "))
-                + " && ";
-            env.put("PYTHONPATH", target.toString());
+                + reqs.stream().map(RunPipeline::shellQuote).collect(Collectors.joining(" "))
+                + " && " + pythonPathExport(target.toString());
         } else {
             runContext.logger().info("Using Beam SDK pre-installed in the container image.");
         }
@@ -369,12 +381,9 @@ public class RunPipeline extends AbstractExecScript implements io.kestra.core.mo
 
         runPipelineOverPythonCmd.addAll(buildOptionArgs(options, Map.of()));
 
-        String finalCmd = prelude + "timeout --signal=TERM " + pipelineTimeoutSeconds + " " + String.join(" ", runPipelineOverPythonCmd) + "; rc=$?; " +
-            "if [ $rc -eq 0 ]; then echo ''; echo '::{\"outputs\":{\"state\":\"FINISHED\"}}::'; exit 0; " +
-            "elif [ $rc -eq 124 ]; then echo ''; echo '::{\"outputs\":{\"state\":\"TIMEOUT\"}}::' >&2; exit 124; " +
-            "else exit $rc; fi";
+        var finalCmd = pipelineScript(prelude, pipelineTimeoutSeconds, String.join(" ", runPipelineOverPythonCmd));
 
-        return runCommandReturnOutput(runContext, "beam-python", env, finalCmd);
+        return runCommandReturnOutput(runContext, "beam-python", finalCmd);
     }
 
     private RunnerConfigHolder resolveRunnerOptions(RunContext runContext, BeamRunner runner) throws Exception {
@@ -398,20 +407,30 @@ public class RunPipeline extends AbstractExecScript implements io.kestra.core.mo
             : new RunnerConfigHolder(rc.toPipelineOptions(), rc);
     }
 
-    private void runCommand(RunContext runContext, String label, Map<String, String> env, String command) throws Exception {
-        ScriptOutput out = runCommandReturnOutput(runContext, label, env, command);
-        if (out.getExitCode() != 0) {
-            throw new IllegalStateException("Command failed: " + label);
-        }
+    // beforeCommands run first and may export their own PYTHONPATH: extend whatever it is when the requirements are on the path
+    static String pythonPathExport(String target) {
+        return "export PYTHONPATH=" + shellQuote(target) + "\"${PYTHONPATH:+:$PYTHONPATH}\" && ";
     }
 
-    private ScriptOutput runCommandReturnOutput(RunContext runContext, String label, Map<String, String> env, String command) throws Exception {
-        ScriptOutput out = this.commands(runContext)
-            .withContainerImage(runContext.render(containerImage).as(String.class).orElse(DEFAULT_IMAGE))
-            .withEnv(env)
+    // '|| rc=$?' so set -e does not exit before the TIMEOUT marker is printed
+    static String pipelineScript(String prelude, int timeoutSeconds, String pipelineCommand) {
+        return "rc=0; " + prelude + "timeout --signal=TERM " + timeoutSeconds + " " + pipelineCommand + " || rc=$?; " +
+            "if [ $rc -eq 0 ]; then echo ''; echo '::{\"outputs\":{\"state\":\"FINISHED\"}}::'; exit 0; " +
+            "elif [ $rc -eq 124 ]; then echo ''; echo '::{\"outputs\":{\"state\":\"TIMEOUT\"}}::' >&2; exit 124; " +
+            "else exit $rc; fi";
+    }
+
+    CommandsWrapper buildCommands(RunContext runContext, String command) throws Exception {
+        return this.commands(runContext)
             .withInterpreter(this.interpreter)
-            .withFailFast(runContext.render(this.failFast).as(Boolean.class).orElse(true))
-            .withCommands(Property.ofValue(List.of(command)))
+            .withBeforeCommands(this.beforeCommands)
+            .withBeforeCommandsWithOptions(true)
+            .withContainerImage(runContext.render(containerImage).as(String.class).orElse(DEFAULT_IMAGE))
+            .withCommands(Property.ofValue(List.of(command)));
+    }
+
+    private ScriptOutput runCommandReturnOutput(RunContext runContext, String label, String command) throws Exception {
+        var out = this.buildCommands(runContext, command)
             .withLogConsumer(new DefaultLogConsumer(runContext) {
                 // To avoid having regular logs from the runner containers displayed as ERROR
                 @Override
@@ -501,7 +520,7 @@ public class RunPipeline extends AbstractExecScript implements io.kestra.core.mo
      * POSIX-ish single-quote escape.
      * Example: abc'd -> 'abc'"'"'d'
      */
-    private String shellQuote(String stringToQuote) {
+    private static String shellQuote(String stringToQuote) {
         if (stringToQuote == null) {
             return "''";
         }
