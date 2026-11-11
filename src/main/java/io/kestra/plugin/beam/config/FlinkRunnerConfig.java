@@ -61,7 +61,11 @@ public class FlinkRunnerConfig implements RunnerConfig {
         var options = new LinkedHashMap<String, Object>();
 
         flinkMaster().ifPresent(value -> options.put("flink_master", value));
-        options.putAll(toJavaPipelineOptions());
+        Optional.ofNullable(parallelism).ifPresent(value -> options.put("parallelism", value));
+        Optional.ofNullable(savepointDir).ifPresent(value -> options.put("savepoint_path", value));
+        Optional.ofNullable(stateBackend).ifPresent(value -> options.put("state_backend", value));
+        Optional.ofNullable(stateBackendStoragePath).ifPresent(value -> options.put("state_backend_storage_path", value));
+        Optional.ofNullable(jarPath).ifPresent(value -> options.put("files_to_stage", value));
 
         return options;
     }
@@ -72,10 +76,10 @@ public class FlinkRunnerConfig implements RunnerConfig {
         var options = new LinkedHashMap<String, Object>();
 
         Optional.ofNullable(parallelism).ifPresent(value -> options.put("parallelism", value));
-        Optional.ofNullable(savepointDir).ifPresent(value -> options.put("savepoint_path", value));
-        Optional.ofNullable(stateBackend).ifPresent(value -> options.put("state_backend", value));
-        Optional.ofNullable(stateBackendStoragePath).ifPresent(value -> options.put("state_backend_storage_path", value));
-        Optional.ofNullable(jarPath).ifPresent(value -> options.put("files_to_stage", value));
+        Optional.ofNullable(savepointDir).ifPresent(value -> options.put("savepointPath", value));
+        Optional.ofNullable(stateBackend).ifPresent(value -> options.put("stateBackend", value));
+        Optional.ofNullable(stateBackendStoragePath).ifPresent(value -> options.put("stateBackendStoragePath", value));
+        Optional.ofNullable(jarPath).ifPresent(value -> options.put("filesToStage", value));
 
         return options;
     }

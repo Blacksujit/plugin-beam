@@ -4,11 +4,16 @@ import java.io.ByteArrayInputStream;
 import java.lang.reflect.Method;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
+import org.apache.beam.runners.flink.FlinkPipelineOptions;
+import org.apache.beam.runners.spark.SparkPipelineOptions;
 import org.junit.jupiter.api.Test;
 import org.slf4j.event.Level;
 
@@ -32,7 +37,6 @@ import io.kestra.core.utils.TestsUtils;
 import io.kestra.plugin.beam.config.RunnerConfigHolder;
 import io.kestra.plugin.core.runner.Process;
 import io.kestra.plugin.scripts.exec.scripts.models.ScriptOutput;
-import io.kestra.plugin.scripts.exec.scripts.runners.CommandsWrapper;
 
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
@@ -187,6 +191,114 @@ class RunPipelineTest {
 
         var exception = assertThrows(IllegalArgumentException.class, () -> task.run(runContext));
         assertTrue(exception.getMessage().contains("serviceAccountKey"));
+    }
+
+    @Test
+    void javaSdkPassesOptionValuesWithoutShellQuotes() throws Exception {
+        var task = RunPipeline.builder()
+            .id(IdUtils.create())
+            .type(RunPipeline.class.getName())
+            .beamRunner(Property.ofValue(BeamRunner.DATAFLOW))
+            .sdk(Property.ofValue(BeamSDK.JAVA))
+            .definition(Property.ofValue("pipeline: {}"))
+            .runnerConfig(
+                Property.ofValue(
+                    Map.of(
+                        "projectId", "my-project",
+                        "region", "europe-west1",
+                        "tempLocation", "gs://my-bucket/tmp",
+                        "maxWorkers", 5
+                    )
+                )
+            )
+            .build();
+        var runContext = contextFor(task);
+        var holder = (RunnerConfigHolder) invokePrivate(task, "resolveRunnerOptions", runContext, BeamRunner.DATAFLOW);
+
+        var options = task.javaPipelineOptions(Map.of("appName", "it's a job, with a=b"), holder).as(DataflowPipelineOptions.class);
+
+        assertEquals("my-project", options.getProject());
+        assertEquals("europe-west1", options.getRegion());
+        assertEquals("gs://my-bucket/tmp", options.getTempLocation());
+        assertEquals(5, options.getMaxNumWorkers());
+        assertEquals("it's a job, with a=b", options.getAppName());
+    }
+
+    @Test
+    void javaSdkUsesJavaFlinkOptionNames() throws Exception {
+        var task = RunPipeline.builder()
+            .id(IdUtils.create())
+            .type(RunPipeline.class.getName())
+            .beamRunner(Property.ofValue(BeamRunner.FLINK))
+            .sdk(Property.ofValue(BeamSDK.JAVA))
+            .definition(Property.ofValue("pipeline: {}"))
+            .runnerConfig(
+                Property.ofValue(
+                    Map.of(
+                        "executionMode", "[local]",
+                        "parallelism", 2,
+                        "savepointDir", "/tmp/savepoints",
+                        "stateBackend", "rocksdb",
+                        "stateBackendStoragePath", "file:///tmp/state",
+                        "jarPath", "/tmp/job.jar"
+                    )
+                )
+            )
+            .build();
+        var runContext = contextFor(task);
+        var holder = (RunnerConfigHolder) invokePrivate(task, "resolveRunnerOptions", runContext, BeamRunner.FLINK);
+
+        var options = task.javaPipelineOptions(Map.of(), holder).as(FlinkPipelineOptions.class);
+
+        assertEquals("[local]", options.getFlinkMaster());
+        assertEquals(2, options.getParallelism());
+        assertEquals("/tmp/savepoints", options.getSavepointPath());
+        assertEquals("rocksdb", options.getStateBackend());
+        assertEquals("file:///tmp/state", options.getStateBackendStoragePath());
+        assertEquals(List.of("/tmp/job.jar"), options.getFilesToStage());
+    }
+
+    @Test
+    void javaSdkPassesSparkOptionsWithoutShellQuotes() throws Exception {
+        var task = RunPipeline.builder()
+            .id(IdUtils.create())
+            .type(RunPipeline.class.getName())
+            .beamRunner(Property.ofValue(BeamRunner.SPARK))
+            .sdk(Property.ofValue(BeamSDK.JAVA))
+            .definition(Property.ofValue("pipeline: {}"))
+            .runnerConfig(Property.ofValue(Map.of("master", "local[2]", "checkpointDir", "/tmp/checkpoints")))
+            .build();
+        var runContext = contextFor(task);
+        var holder = (RunnerConfigHolder) invokePrivate(task, "resolveRunnerOptions", runContext, BeamRunner.SPARK);
+
+        var options = task.javaPipelineOptions(Map.of(), holder).as(SparkPipelineOptions.class);
+
+        assertEquals("local[2]", options.getSparkMaster());
+        assertEquals("/tmp/checkpoints", options.getCheckpointDir());
+    }
+
+    @Test
+    void pythonSdkStillShellQuotesOptionValues() throws Exception {
+        var bin = Files.createTempDirectory("fake-python");
+        var python = Files.writeString(bin.resolve("python3"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$(dirname \"$0\")/args.txt\"\n");
+        Files.setPosixFilePermissions(python, PosixFilePermissions.fromString("rwxr-xr-x"));
+        var value = "it's a job; echo injected, a=b";
+
+        var task = RunPipeline.builder()
+            .id(IdUtils.create())
+            .type(RunPipeline.class.getName())
+            .taskRunner(Process.instance())
+            .sdk(Property.ofValue(BeamSDK.PYTHON))
+            .beamRunner(Property.ofValue(BeamRunner.DIRECT))
+            .definition(Property.ofValue("pipeline: {}"))
+            .env(Property.ofValue(Map.of("PATH", bin + ":" + System.getenv("PATH"))))
+            .options(Property.ofValue(Map.of("job_name", value)))
+            .build();
+
+        task.run(TestsUtils.mockRunContext(runContextFactory, task, Map.of()));
+
+        var args = Files.readAllLines(bin.resolve("args.txt"));
+        assertTrue(args.contains("--job_name=" + value), args.toString());
     }
 
     private Object invokePrivate(Object target, String method, Object... args) throws Exception {
