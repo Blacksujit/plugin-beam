@@ -391,7 +391,7 @@ public class RunPipeline extends AbstractExecScript implements io.kestra.core.mo
         return runCommandReturnOutput(runContext, "beam-python", finalCmd);
     }
 
-    private RunnerConfigHolder resolveRunnerOptions(RunContext runContext, BeamRunner runner) throws Exception {
+    RunnerConfigHolder resolveRunnerOptions(RunContext runContext, BeamRunner runner) throws Exception {
 
         Map<String, Object> rRunnerConfig = runContext.render(this.runnerConfig).asMap(String.class, Object.class);
 
@@ -487,7 +487,7 @@ public class RunPipeline extends AbstractExecScript implements io.kestra.core.mo
         }
     }
 
-    private String loadDefinition(RunContext runContext) throws Exception {
+    String loadDefinition(RunContext runContext) throws Exception {
         String inline = runContext.render(definition).as(String.class).orElse(null);
         if (inline != null) {
             return inline;

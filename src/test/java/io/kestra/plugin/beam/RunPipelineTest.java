@@ -1,7 +1,6 @@
 package io.kestra.plugin.beam;
 
 import java.io.ByteArrayInputStream;
-import java.lang.reflect.Method;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -110,7 +109,7 @@ class RunPipelineTest {
             .requirements(configured.getRequirements())
             .build();
 
-        String loaded = (String) invokePrivate(withFile, "loadDefinition", runContext);
+        var loaded = withFile.loadDefinition(runContext);
         assertEquals(yaml, loaded);
     }
 
@@ -134,7 +133,7 @@ class RunPipelineTest {
         TaskRun taskRun = TestsUtils.mockTaskRun(execution, base);
         RunContext runContext = runContextFactory.of(flow, base, execution, taskRun);
 
-        RunnerConfigHolder flinkHolder = (RunnerConfigHolder) invokePrivate(base, "resolveRunnerOptions", runContext, BeamRunner.FLINK);
+        var flinkHolder = base.resolveRunnerOptions(runContext, BeamRunner.FLINK);
         assertTrue(flinkHolder.config() != null);
 
         RunPipeline sparkTask = RunPipeline.builder()
@@ -147,12 +146,7 @@ class RunPipelineTest {
             .options(base.getOptions())
             .requirements(base.getRequirements())
             .build();
-        RunnerConfigHolder sparkHolder = (RunnerConfigHolder) invokePrivate(
-            sparkTask,
-            "resolveRunnerOptions",
-            runContextFactory.of(flow, sparkTask, execution, TestsUtils.mockTaskRun(execution, sparkTask)),
-            BeamRunner.SPARK
-        );
+        var sparkHolder = sparkTask.resolveRunnerOptions(runContextFactory.of(flow, sparkTask, execution, TestsUtils.mockTaskRun(execution, sparkTask)), BeamRunner.SPARK);
         assertTrue(sparkHolder.config() != null);
 
         RunPipeline dataflowTask = RunPipeline.builder()
@@ -165,12 +159,7 @@ class RunPipelineTest {
             .options(base.getOptions())
             .requirements(base.getRequirements())
             .build();
-        RunnerConfigHolder dataflowHolder = (RunnerConfigHolder) invokePrivate(
-            dataflowTask,
-            "resolveRunnerOptions",
-            runContextFactory.of(flow, dataflowTask, execution, TestsUtils.mockTaskRun(execution, dataflowTask)),
-            BeamRunner.DATAFLOW
-        );
+        var dataflowHolder = dataflowTask.resolveRunnerOptions(runContextFactory.of(flow, dataflowTask, execution, TestsUtils.mockTaskRun(execution, dataflowTask)), BeamRunner.DATAFLOW);
         assertTrue(dataflowHolder.config() != null);
     }
 
@@ -213,7 +202,7 @@ class RunPipelineTest {
             )
             .build();
         var runContext = contextFor(task);
-        var holder = (RunnerConfigHolder) invokePrivate(task, "resolveRunnerOptions", runContext, BeamRunner.DATAFLOW);
+        var holder = task.resolveRunnerOptions(runContext, BeamRunner.DATAFLOW);
 
         var options = task.javaPipelineOptions(Map.of("appName", "it's a job, with a=b"), holder).as(DataflowPipelineOptions.class);
 
@@ -246,7 +235,7 @@ class RunPipelineTest {
             )
             .build();
         var runContext = contextFor(task);
-        var holder = (RunnerConfigHolder) invokePrivate(task, "resolveRunnerOptions", runContext, BeamRunner.FLINK);
+        var holder = task.resolveRunnerOptions(runContext, BeamRunner.FLINK);
 
         var options = task.javaPipelineOptions(Map.of(), holder).as(FlinkPipelineOptions.class);
 
@@ -269,7 +258,7 @@ class RunPipelineTest {
             .runnerConfig(Property.ofValue(Map.of("master", "local[2]", "checkpointDir", "/tmp/checkpoints")))
             .build();
         var runContext = contextFor(task);
-        var holder = (RunnerConfigHolder) invokePrivate(task, "resolveRunnerOptions", runContext, BeamRunner.SPARK);
+        var holder = task.resolveRunnerOptions(runContext, BeamRunner.SPARK);
 
         var options = task.javaPipelineOptions(Map.of(), holder).as(SparkPipelineOptions.class);
 
@@ -299,35 +288,6 @@ class RunPipelineTest {
 
         var args = Files.readAllLines(bin.resolve("args.txt"));
         assertTrue(args.contains("--job_name=%s".formatted(value)), args.toString());
-    }
-
-    private Object invokePrivate(Object target, String method, Object... args) throws Exception {
-        Method found = null;
-        for (Method m : target.getClass().getDeclaredMethods()) {
-            if (!m.getName().equals(method)) {
-                continue;
-            }
-            if (m.getParameterCount() != args.length) {
-                continue;
-            }
-            boolean assignable = true;
-            Class<?>[] params = m.getParameterTypes();
-            for (int i = 0; i < params.length; i++) {
-                if (!params[i].isAssignableFrom(args[i].getClass())) {
-                    assignable = false;
-                    break;
-                }
-            }
-            if (assignable) {
-                found = m;
-                break;
-            }
-        }
-        if (found == null) {
-            throw new NoSuchMethodException(method);
-        }
-        found.setAccessible(true);
-        return found.invoke(target, args);
     }
 
     private RunContext contextFor(RunPipeline task) throws Exception {
