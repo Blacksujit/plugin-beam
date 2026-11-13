@@ -468,8 +468,8 @@ public class RunPipeline extends AbstractExecScript implements io.kestra.core.mo
         Map<String, Object> runnerOptions,
         UnaryOperator<String> quote) {
         List<String> args = new ArrayList<>();
-        options.forEach((k, v) -> args.add("--" + k + "=" + quote.apply(v)));
-        runnerOptions.forEach((k, v) -> args.add("--" + k + "=" + quote.apply(stringify(v))));
+        options.forEach((k, v) -> args.add("--%s=%s".formatted(k, quote.apply(v))));
+        runnerOptions.forEach((k, v) -> args.add("--%s=%s".formatted(k, quote.apply(stringify(v)))));
         return args;
     }
 

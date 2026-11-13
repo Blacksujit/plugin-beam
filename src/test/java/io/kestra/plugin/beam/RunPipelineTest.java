@@ -291,14 +291,14 @@ class RunPipelineTest {
             .sdk(Property.ofValue(BeamSDK.PYTHON))
             .beamRunner(Property.ofValue(BeamRunner.DIRECT))
             .definition(Property.ofValue("pipeline: {}"))
-            .env(Property.ofValue(Map.of("PATH", bin + ":" + System.getenv("PATH"))))
+            .env(Property.ofValue(Map.of("PATH", "%s:%s".formatted(bin, System.getenv("PATH")))))
             .options(Property.ofValue(Map.of("job_name", value)))
             .build();
 
         task.run(TestsUtils.mockRunContext(runContextFactory, task, Map.of()));
 
         var args = Files.readAllLines(bin.resolve("args.txt"));
-        assertTrue(args.contains("--job_name=" + value), args.toString());
+        assertTrue(args.contains("--job_name=%s".formatted(value)), args.toString());
     }
 
     private Object invokePrivate(Object target, String method, Object... args) throws Exception {
